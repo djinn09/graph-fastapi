@@ -208,4 +208,8 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    """
+    This event handler calls the close_all_connections method of the connection_pool
+    object to close all connections in the pool when the app is shutting down
+    """
     connection_pool.close_all_connections()
