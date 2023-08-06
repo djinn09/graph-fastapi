@@ -1,23 +1,38 @@
-from fastapi import FastAPI, BackgroundTasks, Depends
-import asyncio
+# Import the FastAPI, Depends, websockets, os, and logging libraries
+from fastapi import FastAPI, Depends
 import websockets
-from gremlin_python.structure.graph import Graph
-from gremlin_python.driver.driver_remote_connection import DriverRemoteConnection
-import queue
-import time
+import os
+import logging
 
+# Import the gremlin_python library and its modules
+from gremlin_python import statics
+from gremlin_python.structure.graph import Graph
+from gremlin_python.process.graph_traversal import __
+from gremlin_python.driver.driver_remote_connection import DriverRemoteConnection
+
+# Import the queue and asyncio libraries
+import queue
+import asyncio
+
+# Import the pydantic library and its modules
+from pydantic import BaseModel, Field
+
+# Create a FastAPI app object
 app = FastAPI()
 
-# Neptune Configuration
-neptune_endpoint = 'your-neptune-endpoint'
-neptune_port = 8182
+# Create a logger object
+logger = logging.getLogger(__name__)
 
-# Define the minimum and maximum number of connections in the pool
-min_connections = 5
-max_connections = 20
+# Define the Neptune endpoint and port from environment variables
+neptune_endpoint = os.environ.get('NEPTUNE_ENDPOINT')
+neptune_port = os.environ.get('NEPTUNE_PORT')
 
-# Connection timeout in seconds
-connection_timeout = 15 * 60
+# Define the minimum and maximum number of connections in the pool from environment variables or default values
+min_connections = int(os.environ.get('MIN_CONNECTIONS', 5))
+max_connections = int(os.environ.get('MAX_CONNECTIONS', 20))
+
+# Define the connection timeout in seconds from environment variables or default value
+connection_timeout = int(os.environ.get('CONNECTION_TIMEOUT', 15 * 60))
 
 # Create a queue object to store the connections
 connection_pool = queue.Queue(maxsize=max_connections)
@@ -64,28 +79,37 @@ async def create_connection():
     connection_usage[ws] = True  # Mark the connection as in use
     return ws
 
-# Define a function to execute a Gremlin query
-async def execute_query(query: str):
-    ws = await get_connection()
-    remote_connection = DriverRemoteConnection(ws, 'g')
-    try:
-        g = Graph().traversal().withRemote(remote_connection)
-        result = g.V().hasLabel(query).toList()  # Modify the query as needed
-        return result
-    finally:
-        await return_connection(ws)
+# Define a Pydantic model for the input data schema
+class QueryInput(BaseModel):
+    query: str = Field(..., example="person")
 
-# Background task to periodically check and replace connections
+# Define a Pydantic model for the output data schema
+class QueryOutput(BaseModel):
+    result: list
+
+# Define an endpoint that takes a query input and returns a query output using a connection from the pool
+@app.post('/', response_model=QueryOutput)
+async def execute_query(input: QueryInput, remote_connection: DriverRemoteConnection = Depends(get_connection)):
+    ws = remote_connection._client._transport._ws  # Get the WebSocket object from the remote connection object
+    try:
+        g = Graph().traversal().withRemote(remote_connection)  # Create a graph traversal object with the remote connection dependency
+        result = g.V().hasLabel(input.query).toList()  # Run the query using the input data 
+        output = QueryOutput(result=result)  # Create an output object using the output data schema 
+        return output  # Return the output object as JSON 
+    finally:
+        await return_connection(ws)  # Return the connection to the pool
+
+# Background task to periodically check and replace connections that are idle for longer than 15 minutes 
 async def check_connection_timeouts():
     while True:
-        await asyncio.sleep(60)  # Check every 1 minute
+        await asyncio.sleep(60)  # Check every 1 minute 
         current_time = time.time()
         for ws, in_use in connection_usage.items():
             if not in_use and current_time - ws.creation_time > connection_timeout:
-                await close_connection(ws)
-                new_ws = await create_connection()
-                connection_pool.put(new_ws)
-                new_ws.creation_time = current_time
+                await close_connection(ws)  # Close and delete the idle connection 
+                new_ws = await create_connection()  # Create a new connection 
+                connection_pool.put(new_ws)  # Put the new connection in the queue 
+                new_ws.creation_time = current_time  # Set the creation time of the new connection 
 
 @app.on_event("startup")
 async def startup_event():
@@ -94,7 +118,9 @@ async def startup_event():
     # Start the background task to check connection timeouts
     loop.create_task(check_connection_timeouts())
 
-@app.get('/')
-async def execute_gremlin_query(query: str):
-    result = await execute_query(query)
-    return {"result": result}
+@app.on_event("shutdown")
+async def shutdown_event():
+    # Close all the connections in the pool
+    for ws in connection_usage.keys():
+        await close_connection(ws)
+
