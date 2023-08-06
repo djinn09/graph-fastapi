@@ -78,19 +78,19 @@ class GremlinConnection:
         except Exception as e:
             logger.error("Error while closing connection: %s", str(e))
 
-
 class ConnectionPool:
     """A connection pool for managing Gremlin connections."""
     def __init__(self, min_connections: int, max_connections: int, timeout: int, max_creation_time: int, circuit_breaker_threshold: int):
-        self.min_connections = min_connections
-        self.max_connections = max_connections
-        self.timeout = timeout
-        self.max_creation_time = max_creation_time
-        self.circuit_breaker_threshold = circuit_breaker_threshold
-        self.connections = queue.Queue()
-        self.partitions = {}
-        self.failed_connection_attempts = 0
+        self.min_connections = min_connections  # The minimum number of connections in the pool
+        self.max_connections = max_connections  # The maximum number of connections in the pool
+        self.timeout = timeout  # The timeout for idle connections
+        self.max_creation_time = max_creation_time  # The maximum time allowed for creating a new connection
+        self.circuit_breaker_threshold = circuit_breaker_threshold  # The threshold for triggering the circuit breaker
+        self.connections = queue.Queue()  # A queue to store the available connections
+        self.partitions = {}  # A dictionary to store the connections by context ID
+        self.failed_connection_attempts = 0  # The number of failed attempts to create a new connection
 
+        # Create the minimum number of connections and add them to the pool
         for _ in range(self.min_connections):
             connection = GremlinConnection(None)
             connection.connect()
@@ -100,75 +100,76 @@ class ConnectionPool:
     def create_connection(self, context_id):
         """Create a new connection if within the pool size limits."""
         try:
-            start_time = time.time()
-            connection = GremlinConnection(context_id)
-            connection.connect()
-            creation_time = time.time() - start_time
+            start_time = time.time()  # Record the start time of the connection creation
+            connection = GremlinConnection(context_id)  # Create a new GremlinConnection object
+            connection.connect()  # Connect to the Gremlin server
+            creation_time = time.time() - start_time  # Calculate the creation time of the connection
 
-            connection_creation_time_histogram.observe(creation_time)
+            connection_creation_time_histogram.observe(creation_time)  # Record the creation time in a histogram
 
-            if creation_time > self.max_creation_time:
+            if creation_time > self.max_creation_time:  # If the creation time exceeded the maximum allowed time
                 logger.warning("Connection creation exceeded max time: %f seconds", creation_time)
-                connection.close()
+                connection.close()  # Close the connection
                 return None
 
-            self.connection_gauge.inc()
-            self.failed_connection_attempts = 0
+            self.connection_gauge.inc()  # Increment the connection gauge
+            self.failed_connection_attempts = 0  # Reset the failed connection attempts counter
             return connection
         except Exception as e:
             logger.error("Error creating connection: %s", str(e))
-            self.failed_connection_attempts += 1
-            if self.failed_connection_attempts > self.circuit_breaker_threshold:
+            self.failed_connection_attempts += 1  # Increment the failed connection attempts counter
+            if self.failed_connection_attempts > self.circuit_breaker_threshold:  # If the failed attempts exceeded the threshold
                 logger.warning("Circuit breaker triggered. Too many failed connection attempts.")
-                self.failed_connection_attempts = 0
+                self.failed_connection_attempts = 0  # Reset the failed connection attempts counter
             raise
 
     def close_idle_connections(self):
-        
-        now = time.time()
-        while not self.connections.empty():
-            connection = self.connections.get()
-            if now - connection.creation_time > self.timeout:
-                connection.close()
-                self.connection_gauge.dec()
+        """Close idle connections that have exceeded the timeout."""
+        now = time.time()  # Get the current time
+        while not self.connections.empty():  # While there are still connections in the pool
+            connection = self.connections.get()  # Get a connection from the pool
+            if now - connection.creation_time > self.timeout:  # If the idle time of the connection exceeded the timeout
+                connection.close()  # Close the connection
+                self.connection_gauge.dec()  # Decrement the connection gauge
             else:
-                self.connections.put(connection)
+                self.connections.put(connection)  # Put the connection back in the pool if it is still valid
                 break
 
     @contextmanager
     def get_connection(self, context_id):
         """Get a connection from the pool or create a new one if necessary."""
-        if context_id not in self.partitions:
-            self.partitions[context_id] = queue.Queue()
+        if context_id not in self.partitions:  # If there is no partition for this context ID yet
+            self.partitions[context_id] = queue.Queue()  # Create a new partition for this context ID
 
         try:
-            connection = self.partitions[context_id].get_nowait()
-        except queue.Empty:
-            connection = self.create_connection(context_id)
+            connection = self.partitions[context_id].get_nowait()  # Try to get a connection from this partition without waiting
+        except queue.Empty:  # If there are no available connections in this partition
+            connection = self.create_connection(context_id)  # Create a new connection
 
-        if connection:
-            yield connection
-            if time.time() - connection.creation_time > self.timeout:
-                connection.close()
+        if connection:  # If a valid connection was obtained or created
+            yield connection  # Yield it to be used by the caller
+
+            if time.time() - connection.creation_time > self.timeout:  # If this idle time of this returned exceeded the timeout 
+                connection.close()   # Close it 
             else:
-                self.partitions[context_id].put(connection)
+                self.partitions[context_id].put(connection)   # Put it back into its partition 
 
     def adjust_pool_size(self, num_connections):
         """Adjust the pool size to the desired value."""
-        current_pool_size = sum(partition.qsize() for partition in self.partitions.values())
-        if num_connections > current_pool_size:
-            diff = num_connections - current_pool_size
-            for _ in range(diff):
-                connection = self.create_connection(None)
-                if connection:
-                    self.connections.put(connection)
-        elif num_connections < current_pool_size:
-            diff = current_pool_size - num_connections
-            for _ in range(diff):
-                for partition in self.partitions.values():
-                    if not partition.empty():
-                        connection = partition.get()
-                        connection.close()
+        current_pool_size = sum(partition.qsize() for partition in self.partitions.values())   # Calculate current pool size 
+        if num_connections > current_pool_size:   # If desired size is greater than current size 
+            diff = num_connections - current_pool_size   # Calculate difference 
+            for _ in range(diff):   # For each difference 
+                connection = self.create_connection(None)   # Create a new connection 
+                if connection:   # If connection is valid 
+                    self.connections.put(connection)   # Put it into the pool 
+        elif num_connections < current_pool_size:   # If desired size is less than current size 
+            diff = current_pool_size - num_connections   # Calculate difference 
+            for _ in range(diff):   # For each difference 
+                for partition in self.partitions.values():   # For each partition 
+                    if not partition.empty():   # If partition is not empty 
+                        connection = partition.get()   # Get a connection from the partition 
+                        connection.close()   # Close the connection 
                     else:
                         break
 
