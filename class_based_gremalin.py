@@ -205,3 +205,7 @@ async def execute_query(query: str, background_tasks: BackgroundTasks, request: 
 async def startup_event():
     connection_pool.close_idle_connections()
     start_http_server(8000)  # Expose Prometheus metrics on port 8000
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    connection_pool.close_all_connections()
