@@ -23,19 +23,21 @@ CONNECTION_TIMEOUT = config('CONNECTION_TIMEOUT', default=900, cast=int)
 MAX_CREATION_TIME = config('MAX_CREATION_TIME', default=5, cast=int)
 CIRCUIT_BREAKER_THRESHOLD = config('CIRCUIT_BREAKER_THRESHOLD', default=10, cast=int)
 
-# Define Prometheus metrics
+# Constants for Prometheus metrics
 connection_gauge = Gauge("connection_pool_connections", "Number of active connections")
 connection_creation_time_histogram = Histogram("connection_creation_time_seconds", "Histogram of connection creation times")
 query_execution_time_histogram = Histogram("query_execution_time_seconds", "Histogram of query execution times")
 query_execution_error_count = Gauge("query_execution_errors", "Number of query execution errors")
 
 class GremlinConnection:
+    """A wrapper class to manage a Gremlin connection."""
     def __init__(self, context_id):
         self.client = None
         self.context_id = context_id
         self.failed_attempts = 0
 
     def connect(self):
+        """Execute a Gremlin query and return the results."""
         try:
             if self.failed_attempts < 3:
                 self.client = client.Client(NEPTUNE_ENDPOINT, 'g', message_serializer=serializer.GraphSONSerializersV2d0())
@@ -64,6 +66,7 @@ class GremlinConnection:
             raise
 
     def close(self):
+        """Close the Gremlin connection."""
         try:
             if self.client:
                 self.client.close()
@@ -71,6 +74,7 @@ class GremlinConnection:
             logger.error("Error while closing connection: %s", str(e))
 
 class ConnectionPool:
+    """A connection pool for managing Gremlin connections."""
     def __init__(self, min_connections: int, max_connections: int, timeout: int, max_creation_time: int, circuit_breaker_threshold: int):
         self.min_connections = min_connections
         self.max_connections = max_connections
@@ -88,6 +92,7 @@ class ConnectionPool:
             connection_gauge.inc()
 
     def create_connection(self, context_id):
+        """Create a new connection if within the pool size limits."""
         try:
             start_time = time.time()
             connection = GremlinConnection(context_id)
@@ -113,6 +118,7 @@ class ConnectionPool:
             raise
 
     def close_idle_connections(self):
+        
         now = time.time()
         while not self.connections.empty():
             connection = self.connections.get()
@@ -125,6 +131,7 @@ class ConnectionPool:
 
     @contextmanager
     def get_connection(self, context_id):
+        """Get a connection from the pool or create a new one if necessary."""
         if context_id not in self.partitions:
             self.partitions[context_id] = queue.Queue()
 
@@ -141,6 +148,7 @@ class ConnectionPool:
                 self.partitions[context_id].put(connection)
 
     def adjust_pool_size(self, num_connections):
+        """Adjust the pool size to the desired value."""
         current_pool_size = sum(partition.qsize() for partition in self.partitions.values())
         if num_connections > current_pool_size:
             diff = num_connections - current_pool_size
@@ -170,6 +178,13 @@ connection_pool = ConnectionPool(
 # Route to execute a Gremlin query
 @app.post("/execute")
 async def execute_query(query: str, background_tasks: BackgroundTasks, request: Request):
+     """
+    Execute a Gremlin query using a connection from the connection pool.
+    :param query: The Gremlin query to execute.
+    :param background_tasks: FastAPI BackgroundTasks for executing tasks in the background.
+    :param request: FastAPI Request for obtaining request context.
+    :return: The query results.
+    """
     context_id = request.headers.get("X-Context-ID")
     if not context_id:
         context_id = "default"
