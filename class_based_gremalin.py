@@ -29,49 +29,55 @@ connection_creation_time_histogram = Histogram("connection_creation_time_seconds
 query_execution_time_histogram = Histogram("query_execution_time_seconds", "Histogram of query execution times")
 query_execution_error_count = Gauge("query_execution_errors", "Number of query execution errors")
 
+
+
+
 class GremlinConnection:
     """A wrapper class to manage a Gremlin connection."""
     def __init__(self, context_id):
-        self.client = None
-        self.context_id = context_id
-        self.failed_attempts = 0
+        self.client = None  # The client object for the Gremlin connection
+        self.context_id = context_id  # The context ID for the connection
+        self.failed_attempts = 0  # The number of failed attempts to connect
 
     def connect(self):
         """Execute a Gremlin query and return the results."""
         try:
-            if self.failed_attempts < 3:
+            if self.failed_attempts < 3:  # If there have been less than 3 failed attempts to connect
+                # Create a new client object for the Gremlin connection
                 self.client = client.Client(NEPTUNE_ENDPOINT, 'g', message_serializer=serializer.GraphSONSerializersV2d0())
-                self.failed_attempts = 0
+                self.failed_attempts = 0  # Reset the failed attempts counter
             else:
+                # If there have been 3 or more failed attempts to connect, trigger the circuit breaker
                 logger.warning("Circuit breaker triggered. Connection refused.")
                 raise Exception("Circuit breaker triggered")
         except Exception as e:
             logger.error("Connection error: %s", str(e))
-            self.failed_attempts += 1
+            self.failed_attempts += 1  # Increment the failed attempts counter
             raise
 
     def execute_query(self, query: str):
         try:
-            if not self.client:
+            if not self.client:  # If there is no client object for the Gremlin connection
                 raise Exception("Not connected to database")
-            start_time = time.time()
-            result_set = self.client.submit(query)
-            results = result_set.all().result()
-            execution_time = time.time() - start_time
-            query_execution_time_histogram.observe(execution_time)
-            return results
+            start_time = time.time()  # Record the start time of the query execution
+            result_set = self.client.submit(query)  # Submit the query to the Gremlin server
+            results = result_set.all().result()  # Retrieve all results from the result set
+            execution_time = time.time() - start_time  # Calculate the execution time of the query
+            query_execution_time_histogram.observe(execution_time)  # Record the execution time in a histogram
+            return results  # Return the results of the query
         except Exception as e:
             logger.error("Query execution error: %s", str(e))
-            query_execution_error_count.inc()
+            query_execution_error_count.inc()  # Increment the error count for query execution errors
             raise
 
     def close(self):
         """Close the Gremlin connection."""
         try:
-            if self.client:
-                self.client.close()
+            if self.client:  # If there is a client object for the Gremlin connection
+                self.client.close()  # Close the connection
         except Exception as e:
             logger.error("Error while closing connection: %s", str(e))
+
 
 class ConnectionPool:
     """A connection pool for managing Gremlin connections."""
