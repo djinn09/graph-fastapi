@@ -9,26 +9,25 @@ from prometheus_client import start_http_server, Gauge, Histogram
 from gremlin_python.driver import client, serializer
 from decouple import config
 
-app = FastAPI()
+app = FastAPI()  # Create a new FastAPI app instance
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)  # Set the logging level to INFO
+logger = logging.getLogger(__name__)  # Get a logger instance for this module
 
 # Load configuration from environment variables or .env file
-NEPTUNE_ENDPOINT = config('NEPTUNE_ENDPOINT', default='wss://your-neptune-endpoint:8182/gremlin')
-MIN_CONNECTIONS = config('MIN_CONNECTIONS', default=2, cast=int)
-MAX_CONNECTIONS = config('MAX_CONNECTIONS', default=10, cast=int)
-CONNECTION_TIMEOUT = config('CONNECTION_TIMEOUT', default=900, cast=int)
-MAX_CREATION_TIME = config('MAX_CREATION_TIME', default=5, cast=int)
-CIRCUIT_BREAKER_THRESHOLD = config('CIRCUIT_BREAKER_THRESHOLD', default=10, cast=int)
+NEPTUNE_ENDPOINT = config('NEPTUNE_ENDPOINT', default='wss://your-neptune-endpoint:8182/gremlin')  # The endpoint for the Neptune database
+MIN_CONNECTIONS = config('MIN_CONNECTIONS', default=2, cast=int)  # The minimum number of connections in the pool
+MAX_CONNECTIONS = config('MAX_CONNECTIONS', default=10, cast=int)  # The maximum number of connections in the pool
+CONNECTION_TIMEOUT = config('CONNECTION_TIMEOUT', default=900, cast=int)  # The timeout for idle connections
+MAX_CREATION_TIME = config('MAX_CREATION_TIME', default=5, cast=int)  # The maximum time allowed for creating a new connection
+CIRCUIT_BREAKER_THRESHOLD = config('CIRCUIT_BREAKER_THRESHOLD', default=10, cast=int)  # The threshold for triggering the circuit breaker
 
 # Constants for Prometheus metrics
-connection_gauge = Gauge("connection_pool_connections", "Number of active connections")
-connection_creation_time_histogram = Histogram("connection_creation_time_seconds", "Histogram of connection creation times")
-query_execution_time_histogram = Histogram("query_execution_time_seconds", "Histogram of query execution times")
-query_execution_error_count = Gauge("query_execution_errors", "Number of query execution errors")
-
+connection_gauge = Gauge("connection_pool_connections", "Number of active connections")  # A gauge to track the number of active connections in the pool
+connection_creation_time_histogram = Histogram("connection_creation_time_seconds", "Histogram of connection creation times")  # A histogram to track the distribution of connection creation times
+query_execution_time_histogram = Histogram("query_execution_time_seconds", "Histogram of query execution times")  # A histogram to track the distribution of query execution times
+query_execution_error_count = Gauge("query_execution_errors", "Number of query execution errors")  # A gauge to track the number of query execution errors that have occurred
 
 
 
