@@ -30,6 +30,8 @@ class GremlinConnection:
         self.client = None
         self.context_id = context_id
         self.failed_attempts = 0  # Number of failed attempts
+        self.circuit_breaker_threshold = circuit_breaker_threshold
+        self.failed_connection_attempts = 0  # Count of failed connection attempts
 
     def connect(self):
         try:
@@ -65,7 +67,7 @@ class GremlinConnection:
 
 # Enhanced connection pool with request context, partitioning, circuit breaker, and graceful recovery
 class ConnectionPool:
-    def __init__(self, min_connections: int, max_connections: int, timeout: int, max_creation_time: int):
+    def __init__(self, min_connections: int, max_connections: int, timeout: int, max_creation_time: int, circuit_breaker_threshold: int):
         self.min_connections = min_connections
         self.max_connections = max_connections
         self.timeout = timeout
@@ -94,11 +96,16 @@ class ConnectionPool:
                 connection.close()
                 return None
             
-            # Increment connection gauge and return the connection
+            # Increment connection gauge and reset circuit breaker on success
             self.connection_gauge.inc()
+            self.failed_connection_attempts = 0
             return connection
         except Exception as e:
             logger.error("Error creating connection: %s", str(e))
+            self.failed_connection_attempts += 1
+            if self.failed_connection_attempts > self.circuit_breaker_threshold:
+                logger.warning("Circuit breaker triggered. Too many failed connection attempts.")
+                self.failed_connection_attempts = 0
             raise
 
     def close_idle_connections(self):
@@ -187,7 +194,9 @@ connection_pool = ConnectionPool(
     min_connections=MIN_CONNECTIONS,
     max_connections=MAX_CONNECTIONS,
     timeout=CONNECTION_TIMEOUT,
-    max_creation_time=MAX_CREATION_TIME
+    max_creation_time=MAX_CREATION_TIME,
+    circuit_breaker_threshold=10  # Adjust the threshold based on your needs
+
 )
 
 # Request model
